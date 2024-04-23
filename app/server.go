@@ -28,59 +28,7 @@ func main() {
 			fmt.Println("Error accepting connection: ", err.Error())
 			os.Exit(1)
 		}
-		buffer := make([]byte, 1028)
-		_, err = connection.Read(buffer)
-		if err != nil {
-			fmt.Println("Error writing to connection: ", err.Error())
-			os.Exit(1)
-		}
-
-		req := Request{}
-
-		if err = req.parseRequest(&buffer); err != nil {
-			fmt.Println("Could not parse file: ", err.Error())
-			break
-		}
-
-		res := ""
-		if req.path == "/" {
-			setStatus(&res, 200)
-			res += CRLF
-
-		} else if strings.HasPrefix(req.path, "/echo/") {
-			status := 200
-			contentType := "text/plain"
-			body := strings.TrimPrefix(req.path, "/echo/")
-			setStatus(&res, status)
-			setHeader(&res, "Content-Type", contentType)
-			setHeader(&res, "Content-Length", fmt.Sprint(len(body)))
-			res += CRLF
-			res += body
-		} else if req.path == "/user-agent" {
-			body, ok := req.headers["User-Agent"]
-			if ok {
-				status := 200
-				contentType := "text/plain"
-				setStatus(&res, status)
-				setHeader(&res, "Content-Type", contentType)
-				setHeader(&res, "Content-Length", fmt.Sprint(len(body)))
-				res += CRLF
-				res += body
-			} else {
-				res = "HTTP/1.1 400 Bad Request\r\n\r\n"
-			}
-		} else {
-			res = "HTTP/1.1 404 Not Found\r\n\r\n"
-		}
-
-		_, err = connection.Write([]byte(res))
-
-		if err != nil {
-			fmt.Println("Error writing to connection: ", err.Error())
-			os.Exit(1)
-		}
-
-		connection.Close()
+		go handleRequest(connection)
 	}
 
 }
@@ -92,6 +40,68 @@ type Request struct {
 	headers     map[string]string
 }
 
+func handleRequest(connection net.Conn) {
+	buffer := make([]byte, 1028)
+	_, err := connection.Read(buffer)
+	if err != nil {
+		fmt.Println("Error writing to connection: ", err.Error())
+		os.Exit(1)
+	}
+
+	req := Request{}
+	res := ""
+
+	if err = req.parseRequest(&buffer); err != nil {
+		fmt.Println("Could not parse request: ", err.Error())
+		res = "HTTP/1.1 400 Bad Request\r\n\r\n"
+		_, err = connection.Write([]byte(res))
+
+		if err != nil {
+			fmt.Println("Error writing to connection: ", err.Error())
+			os.Exit(1)
+		}
+		return
+	}
+
+	if req.path == "/" {
+		setStatus(&res, 200)
+		res += CRLF
+
+	} else if strings.HasPrefix(req.path, "/echo/") {
+		status := 200
+		contentType := "text/plain"
+		body := strings.TrimPrefix(req.path, "/echo/")
+		setStatus(&res, status)
+		setHeader(&res, "Content-Type", contentType)
+		setHeader(&res, "Content-Length", fmt.Sprint(len(body)))
+		res += CRLF
+		res += body
+	} else if req.path == "/user-agent" {
+		body, ok := req.headers["User-Agent"]
+		if ok {
+			status := 200
+			contentType := "text/plain"
+			setStatus(&res, status)
+			setHeader(&res, "Content-Type", contentType)
+			setHeader(&res, "Content-Length", fmt.Sprint(len(body)))
+			res += CRLF
+			res += body
+		} else {
+			res = "HTTP/1.1 400 Bad Request\r\n\r\n"
+		}
+	} else {
+		res = "HTTP/1.1 404 Not Found\r\n\r\n"
+	}
+
+	_, err = connection.Write([]byte(res))
+
+	if err != nil {
+		fmt.Println("Error writing to connection: ", err.Error())
+		os.Exit(1)
+	}
+
+	connection.Close()
+}
 func (req *Request) parseRequest(buffer *[]byte) error {
 	lines := bytes.Split(*buffer, []byte("\r\n"))
 	startLine := bytes.Split(lines[0], []byte(" "))
