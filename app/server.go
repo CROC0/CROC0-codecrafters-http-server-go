@@ -89,6 +89,29 @@ func handleRequest(connection net.Conn) {
 		} else {
 			res = "HTTP/1.1 400 Bad Request\r\n\r\n"
 		}
+	} else if strings.HasPrefix(req.path, "/files/") {
+		if len(os.Args) < 3 {
+			fmt.Println("Please ensure a directory is provided. Usage: <program> --directory <directory> ")
+			os.Exit(1)
+		} else {
+			dir := os.Args[2]
+			fileName := strings.TrimPrefix(req.path, "/files/")
+
+			body, err := os.ReadFile(dir + fileName)
+			if err != nil {
+				res = "HTTP/1.1 404 Not Found\r\n\r\n"
+			} else {
+				status := 200
+				contentType := "application/octet-stream"
+				setStatus(&res, status)
+				setHeader(&res, "Content-Type", contentType)
+				setHeader(&res, "Content-Length", fmt.Sprint(len(string(body))))
+				res += CRLF
+				res += string(body)
+			}
+
+		}
+
 	} else {
 		res = "HTTP/1.1 404 Not Found\r\n\r\n"
 	}
