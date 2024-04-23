@@ -41,33 +41,27 @@ func main() {
 }
 
 func handleRequest(conn net.Conn) {
-	buffer := make([]byte, 1024)
-	_, err := conn.Read(buffer)
+
+	req, err := parseRequest(conn)
+	res := createResponse(conn)
+
 	if err != nil {
-		fmt.Println("Error writing to connection: ", err.Error())
-		os.Exit(1)
-	}
-
-	req := Request{}
-	res := createResponse()
-
-	if err = req.parseRequest(&buffer); err != nil {
 		fmt.Println("Could not parse request: ", err.Error())
 		res.status = 400
-		res.sendResponse(conn)
+		res.sendResponse()
 		return
 	}
 
 	if req.path == "/" {
 		res.status = 200
-		res.sendResponse(conn)
+		res.sendResponse()
 
 	} else if strings.HasPrefix(req.path, "/echo/") {
 		res.status = 200
 		res.headers["Content-Type"] = "text/plain"
 		res.body = strings.TrimPrefix(req.path, "/echo/")
 		res.headers["Content-Length"] = fmt.Sprint(len(res.body))
-		res.sendResponse(conn)
+		res.sendResponse()
 
 	} else if req.path == "/user-agent" {
 		body, ok := req.headers["User-Agent"]
@@ -76,10 +70,10 @@ func handleRequest(conn net.Conn) {
 			res.headers["Content-Type"] = "text/plain"
 			res.headers["Content-Length"] = fmt.Sprint(len(body))
 			res.body = body
-			res.sendResponse(conn)
+			res.sendResponse()
 		} else {
 			res.status = 404
-			res.sendResponse(conn)
+			res.sendResponse()
 		}
 	} else if strings.HasPrefix(req.path, "/files/") {
 		if len(os.Args) < 3 {
@@ -93,13 +87,13 @@ func handleRequest(conn net.Conn) {
 				body, err := os.ReadFile(dir + fileName)
 				if err != nil {
 					res.status = 404
-					res.sendResponse(conn)
+					res.sendResponse()
 				} else {
 					res.status = 200
 					res.headers["Content-Type"] = "application/octet-stream"
 					res.headers["Content-Length"] = fmt.Sprint(len(string(body)))
 					res.body = string(body)
-					res.sendResponse(conn)
+					res.sendResponse()
 				}
 			} else {
 				if err := os.WriteFile(dir+fileName, []byte(req.body), os.ModeAppend); err != nil {
@@ -107,13 +101,13 @@ func handleRequest(conn net.Conn) {
 					os.Exit(1)
 				}
 				res.status = 201
-				res.sendResponse(conn)
+				res.sendResponse()
 			}
 
 		}
 	} else {
 		res.status = 404
-		res.sendResponse(conn)
+		res.sendResponse()
 
 	}
 
@@ -127,8 +121,15 @@ type Request struct {
 	headers     map[string]string
 }
 
-func (req *Request) parseRequest(buffer *[]byte) error {
-	lines := bytes.Split(*buffer, []byte("\r\n"))
+func parseRequest(conn net.Conn) (Request, error) {
+	buffer := make([]byte, 1024)
+	_, err := conn.Read(buffer)
+	if err != nil {
+		fmt.Println("Error reading connection: ", err.Error())
+		os.Exit(1)
+	}
+	req := Request{}
+	lines := bytes.Split(buffer, []byte("\r\n"))
 	startLine := bytes.Split(lines[0], []byte(" "))
 	if len(startLine) == 3 {
 		req.method = string(startLine[0])
@@ -136,7 +137,7 @@ func (req *Request) parseRequest(buffer *[]byte) error {
 		req.httpVersion = string(startLine[2])
 		req.headers = make(map[string]string)
 	} else {
-		return errors.New("invalid Request received")
+		return req, errors.New("http request not correct")
 	}
 
 	for _, v := range lines {
@@ -147,9 +148,9 @@ func (req *Request) parseRequest(buffer *[]byte) error {
 			req.headers[name] = value
 		}
 	}
-	str := string(*buffer)
+	str := string(buffer)
 	req.body = str[strings.Index(str, "\r\n\r\n")+4 : strings.Index(str, "\x00")]
-	return nil
+	return req, nil
 
 }
 
@@ -157,22 +158,24 @@ type Response struct {
 	status  int
 	headers map[string]string
 	body    string
+	conn    net.Conn
 }
 
-func createResponse() Response {
+func createResponse(conn net.Conn) Response {
 	r := Response{}
+	r.conn = conn
 	r.headers = make(map[string]string)
 	return r
 }
 
-func (res *Response) sendResponse(conn net.Conn) error {
+func (res *Response) sendResponse() error {
 	str := ""
 	res.setStatus(&str)
 	res.setHeaders(&str)
 	str += CRLF
 	res.setBody(&str)
-	_, err := conn.Write([]byte(str))
-	conn.Close()
+	_, err := res.conn.Write([]byte(str))
+	res.conn.Close()
 	return err
 }
 
