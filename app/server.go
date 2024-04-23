@@ -9,6 +9,14 @@ import (
 	"strings"
 )
 
+type Request struct {
+	method      string
+	path        string
+	httpVersion string
+	body        string
+	headers     map[string]string
+}
+
 const (
 	CRLF     = "\r\n"
 	httpType = "HTTP/1.1"
@@ -31,13 +39,6 @@ func main() {
 		go handleRequest(connection)
 	}
 
-}
-
-type Request struct {
-	method      string
-	path        string
-	httpVersion string
-	headers     map[string]string
 }
 
 func handleRequest(connection net.Conn) {
@@ -97,17 +98,25 @@ func handleRequest(connection net.Conn) {
 			dir := os.Args[2]
 			fileName := strings.TrimPrefix(req.path, "/files/")
 
-			body, err := os.ReadFile(dir + fileName)
-			if err != nil {
-				res = "HTTP/1.1 404 Not Found\r\n\r\n"
+			if req.method == "GET" {
+				body, err := os.ReadFile(dir + fileName)
+				if err != nil {
+					res = "HTTP/1.1 404 Not Found\r\n\r\n"
+				} else {
+					status := 200
+					contentType := "application/octet-stream"
+					setStatus(&res, status)
+					setHeader(&res, "Content-Type", contentType)
+					setHeader(&res, "Content-Length", fmt.Sprint(len(string(body))))
+					res += CRLF
+					res += string(body)
+				}
 			} else {
-				status := 200
-				contentType := "application/octet-stream"
-				setStatus(&res, status)
-				setHeader(&res, "Content-Type", contentType)
-				setHeader(&res, "Content-Length", fmt.Sprint(len(string(body))))
-				res += CRLF
-				res += string(body)
+				if err := os.WriteFile(dir+fileName, []byte(req.body), os.ModeAppend); err != nil {
+					fmt.Println("Error writing to file: ", err.Error())
+					os.Exit(1)
+				}
+				res = "HTTP/1.1 201 Created\r\n\r\n"
 			}
 
 		}
@@ -145,7 +154,10 @@ func (req *Request) parseRequest(buffer *[]byte) error {
 			req.headers[name] = value
 		}
 	}
+	str := string(*buffer)
+	req.body = str[strings.Index(str, "\r\n\r\n")+4 : strings.Index(str, "\x00")]
 	return nil
+
 }
 
 func setStatus(res *string, status int) {
