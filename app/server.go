@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -34,32 +35,45 @@ func main() {
 			os.Exit(1)
 		}
 
-		header := bytes.Split(buffer, []byte("\r\n"))
-		startLine := bytes.Split(header[0], []byte(" "))
-		// _method := startLine[0]
-		path := startLine[1]
-		// _httpVersion := startLine[2]
-		res := ""
+		req := Request{}
 
-		if string(path) == "/" {
+		if err = req.parseRequest(&buffer); err != nil {
+			fmt.Println("Could not parse file: ", err.Error())
+			break
+		}
+
+		res := ""
+		if req.path == "/" {
 			setStatus(&res, 200)
 			res += CRLF
-			_, err = connection.Write([]byte(res))
-		} else if strings.HasPrefix(string(path), "/echo/") {
 
+		} else if strings.HasPrefix(req.path, "/echo/") {
 			status := 200
 			contentType := "text/plain"
-			body := strings.TrimPrefix(string(path), "/echo/")
+			body := strings.TrimPrefix(req.path, "/echo/")
 			setStatus(&res, status)
 			setHeader(&res, "Content-Type", contentType)
 			setHeader(&res, "Content-Length", fmt.Sprint(len(body)))
 			res += CRLF
 			res += body
-			_, err = connection.Write([]byte(res))
+		} else if req.path == "/user-agent" {
+			body, ok := req.headers["User-Agent"]
+			if ok {
+				status := 200
+				contentType := "text/plain"
+				setStatus(&res, status)
+				setHeader(&res, "Content-Type", contentType)
+				setHeader(&res, "Content-Length", fmt.Sprint(len(body)))
+				res += CRLF
+				res += body
+			} else {
+				res = "HTTP/1.1 400 Bad Request\r\n\r\n"
+			}
 		} else {
-			_, err = connection.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
-
+			res = "HTTP/1.1 404 Not Found\r\n\r\n"
 		}
+
+		_, err = connection.Write([]byte(res))
 
 		if err != nil {
 			fmt.Println("Error writing to connection: ", err.Error())
@@ -69,6 +83,36 @@ func main() {
 		connection.Close()
 	}
 
+}
+
+type Request struct {
+	method      string
+	path        string
+	httpVersion string
+	headers     map[string]string
+}
+
+func (req *Request) parseRequest(buffer *[]byte) error {
+	lines := bytes.Split(*buffer, []byte("\r\n"))
+	startLine := bytes.Split(lines[0], []byte(" "))
+	if len(startLine) == 3 {
+		req.method = string(startLine[0])
+		req.path = string(startLine[1])
+		req.httpVersion = string(startLine[2])
+		req.headers = make(map[string]string)
+	} else {
+		return errors.New("invalid Request received")
+	}
+
+	for _, v := range lines {
+		line := bytes.Split(v, []byte(" "))
+		if len(line) == 2 {
+			name := strings.Trim(string(line[0]), ":")
+			value := string(line[1])
+			req.headers[name] = value
+		}
+	}
+	return nil
 }
 
 func setStatus(res *string, status int) {
