@@ -9,18 +9,17 @@ import (
 	"strings"
 )
 
-type Request struct {
-	method      string
-	path        string
-	httpVersion string
-	body        string
-	headers     map[string]string
-}
-
 const (
 	CRLF     = "\r\n"
 	httpType = "HTTP/1.1"
 )
+
+var statusCodes = map[int]string{
+	200: "OK",
+	201: "Created",
+	400: "Bad Request",
+	404: "Not Found",
+}
 
 func main() {
 
@@ -41,54 +40,46 @@ func main() {
 
 }
 
-func handleRequest(connection net.Conn) {
-	buffer := make([]byte, 1028)
-	_, err := connection.Read(buffer)
+func handleRequest(conn net.Conn) {
+	buffer := make([]byte, 1024)
+	_, err := conn.Read(buffer)
 	if err != nil {
 		fmt.Println("Error writing to connection: ", err.Error())
 		os.Exit(1)
 	}
 
 	req := Request{}
-	res := ""
+	res := createResponse()
 
 	if err = req.parseRequest(&buffer); err != nil {
 		fmt.Println("Could not parse request: ", err.Error())
-		res = "HTTP/1.1 400 Bad Request\r\n\r\n"
-		_, err = connection.Write([]byte(res))
-
-		if err != nil {
-			fmt.Println("Error writing to connection: ", err.Error())
-			os.Exit(1)
-		}
+		res.status = 400
+		res.sendResponse(conn)
 		return
 	}
 
 	if req.path == "/" {
-		setStatus(&res, 200)
-		res += CRLF
+		res.status = 200
+		res.sendResponse(conn)
 
 	} else if strings.HasPrefix(req.path, "/echo/") {
-		status := 200
-		contentType := "text/plain"
-		body := strings.TrimPrefix(req.path, "/echo/")
-		setStatus(&res, status)
-		setHeader(&res, "Content-Type", contentType)
-		setHeader(&res, "Content-Length", fmt.Sprint(len(body)))
-		res += CRLF
-		res += body
+		res.status = 200
+		res.headers["Content-Type"] = "text/plain"
+		res.body = strings.TrimPrefix(req.path, "/echo/")
+		res.headers["Content-Length"] = fmt.Sprint(len(res.body))
+		res.sendResponse(conn)
+
 	} else if req.path == "/user-agent" {
 		body, ok := req.headers["User-Agent"]
 		if ok {
-			status := 200
-			contentType := "text/plain"
-			setStatus(&res, status)
-			setHeader(&res, "Content-Type", contentType)
-			setHeader(&res, "Content-Length", fmt.Sprint(len(body)))
-			res += CRLF
-			res += body
+			res.status = 200
+			res.headers["Content-Type"] = "text/plain"
+			res.headers["Content-Length"] = fmt.Sprint(len(body))
+			res.body = body
+			res.sendResponse(conn)
 		} else {
-			res = "HTTP/1.1 400 Bad Request\r\n\r\n"
+			res.status = 404
+			res.sendResponse(conn)
 		}
 	} else if strings.HasPrefix(req.path, "/files/") {
 		if len(os.Args) < 3 {
@@ -101,39 +92,41 @@ func handleRequest(connection net.Conn) {
 			if req.method == "GET" {
 				body, err := os.ReadFile(dir + fileName)
 				if err != nil {
-					res = "HTTP/1.1 404 Not Found\r\n\r\n"
+					res.status = 404
+					res.sendResponse(conn)
 				} else {
-					status := 200
-					contentType := "application/octet-stream"
-					setStatus(&res, status)
-					setHeader(&res, "Content-Type", contentType)
-					setHeader(&res, "Content-Length", fmt.Sprint(len(string(body))))
-					res += CRLF
-					res += string(body)
+					res.status = 200
+					res.headers["Content-Type"] = "application/octet-stream"
+					res.headers["Content-Length"] = fmt.Sprint(len(string(body)))
+					res.body = string(body)
+					res.sendResponse(conn)
 				}
 			} else {
 				if err := os.WriteFile(dir+fileName, []byte(req.body), os.ModeAppend); err != nil {
 					fmt.Println("Error writing to file: ", err.Error())
 					os.Exit(1)
 				}
-				res = "HTTP/1.1 201 Created\r\n\r\n"
+				res.status = 201
+				res.sendResponse(conn)
 			}
 
 		}
-
 	} else {
-		res = "HTTP/1.1 404 Not Found\r\n\r\n"
+		res.status = 404
+		res.sendResponse(conn)
+
 	}
 
-	_, err = connection.Write([]byte(res))
-
-	if err != nil {
-		fmt.Println("Error writing to connection: ", err.Error())
-		os.Exit(1)
-	}
-
-	connection.Close()
 }
+
+type Request struct {
+	method      string
+	path        string
+	httpVersion string
+	body        string
+	headers     map[string]string
+}
+
 func (req *Request) parseRequest(buffer *[]byte) error {
 	lines := bytes.Split(*buffer, []byte("\r\n"))
 	startLine := bytes.Split(lines[0], []byte(" "))
@@ -160,15 +153,41 @@ func (req *Request) parseRequest(buffer *[]byte) error {
 
 }
 
-func setStatus(res *string, status int) {
-	statusCodes := map[int]string{
-		200: "OK",
-		404: "Not Found",
-	}
-	*res += fmt.Sprintf("%s %d %s%s", httpType, status, statusCodes[status], CRLF)
-
+type Response struct {
+	status  int
+	headers map[string]string
+	body    string
 }
 
-func setHeader(res *string, name string, value string) {
-	*res += fmt.Sprintf("%s: %s%s", name, value, CRLF)
+func createResponse() Response {
+	r := Response{}
+	r.headers = make(map[string]string)
+	return r
+}
+
+func (res *Response) sendResponse(conn net.Conn) error {
+	str := ""
+	res.setStatus(&str)
+	res.setHeaders(&str)
+	str += CRLF
+	res.setBody(&str)
+	_, err := conn.Write([]byte(str))
+	conn.Close()
+	return err
+}
+
+func (res *Response) setStatus(str *string) {
+	*str += fmt.Sprintf("%s %d %s%s", httpType, res.status, statusCodes[res.status], CRLF)
+}
+
+func (res *Response) setHeaders(str *string) {
+	for n, v := range res.headers {
+		*str += fmt.Sprintf("%s: %s%s", n, v, CRLF)
+	}
+}
+
+func (res *Response) setBody(str *string) {
+	*str += res.body
+	*str += CRLF
+
 }
